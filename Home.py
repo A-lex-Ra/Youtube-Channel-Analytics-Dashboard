@@ -100,24 +100,70 @@ st.set_page_config(page_title="Youtube Channel Analytics Dashboard",
 ########################################################################################################################
 #                                       SIDE BAR CONFIGURATION
 ########################################################################################################################
+import sqlite3
+import streamlit as st
+import pandas as pd
+
+# === SQLite Helpers ===
+
+def init_db():
+    conn = sqlite3.connect("cache.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS credentials (
+            id INTEGER PRIMARY KEY,
+            api_key TEXT,
+            channel_id TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def get_credentials():
+    conn = sqlite3.connect("cache.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT api_key, channel_id FROM credentials WHERE id = 1")
+    row = cursor.fetchone()
+    conn.close()
+    return row if row else ("", "")
+
+def save_credentials(api_key, channel_id):
+    conn = sqlite3.connect("cache.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO credentials (id, api_key, channel_id)
+        VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET api_key=excluded.api_key, channel_id=excluded.channel_id
+    """, (api_key, channel_id))
+    conn.commit()
+    conn.close()
+
+# === Initialize DB and get stored credentials ===
+init_db()
+stored_api_key, stored_channel_id = get_credentials()
+
+# === Streamlit UI ===
+
 st.title("YouTube Analytics Dashboard")
 
 # Sidebar
 st.sidebar.title("Settings")
 
-# Sidebar: Enter Channel ID and YouTube API Key
+# Initialize session_state
 if 'API_KEY' not in st.session_state:
-    st.session_state.API_KEY = ""
+    st.session_state.API_KEY = stored_api_key
 if 'CHANNEL_ID' not in st.session_state:
-    st.session_state.CHANNEL_ID = ""
+    st.session_state.CHANNEL_ID = stored_channel_id
 
-st.session_state.API_KEY = st.sidebar.text_input("Enter your YouTube API Key", st.session_state.API_KEY,
-                                                 type="password")
+# User input
+st.session_state.API_KEY = st.sidebar.text_input("Enter your YouTube API Key", st.session_state.API_KEY, type="password")
 st.session_state.CHANNEL_ID = st.sidebar.text_input("Enter the YouTube Channel ID", st.session_state.CHANNEL_ID)
 
-if not st.session_state.API_KEY or not st.session_state.CHANNEL_ID:
+# Save credentials to DB if both are provided
+if st.session_state.API_KEY and st.session_state.CHANNEL_ID:
+    save_credentials(st.session_state.API_KEY, st.session_state.CHANNEL_ID)
+else:
     st.warning("Please enter your API Key and Channel ID.")
-    # Display the GitHub link for the user manual
     user_manual_link = "https://github.com/zainmz/Youtube-Channel-Analytics-Dashboard"
     st.markdown(f"If you need help, please refer to the the GitHub Repository for the [User Manual]({user_manual_link}).")
     st.stop()
@@ -125,7 +171,7 @@ if not st.session_state.API_KEY or not st.session_state.CHANNEL_ID:
 # Data Refresh Button
 refresh_button = st.sidebar.button("Refresh Data")
 
-# First Data Load
+# Data Download
 channel_details, videos, all_video_data, videos_df = download_data(st.session_state.API_KEY, st.session_state.CHANNEL_ID)
 
 if channel_details is None:
@@ -140,19 +186,14 @@ if refresh_button:
             st.warning("Invalid YouTube Channel ID. Please check and enter a valid Channel ID.")
             st.stop()
 
-# Data Filters for fine-tuned data selection
+# Filters
 st.sidebar.title("Data Filters")
-
 num_videos = st.sidebar.slider("Select Number of Top Videos to Display:", 1, 50, 10)
 
-# Convert the 'published_date' column to datetime format
+# Dates
 all_video_data['published_date'] = pd.to_datetime(all_video_data['published_date'])
-
-# Extract min and max publish dates
-min_date = all_video_data['published_date'].min().date()  # Ensure it's a date object
-max_date = all_video_data['published_date'].max().date()  # Ensure it's a date object
-
-# Sidebar date input
+min_date = all_video_data['published_date'].min().date()
+max_date = all_video_data['published_date'].max().date()
 start_date = st.sidebar.date_input("Select Start Date", min_date)
 end_date = st.sidebar.date_input("Select End Date", max_date)
 
@@ -165,8 +206,10 @@ tag_search = st.sidebar.text_input("Search Videos by Tag")
 date_range_start = pd.Timestamp(start_date)
 date_range_end = pd.Timestamp(end_date)
 
-filtered_data = all_video_data[(all_video_data['published_date'] >= date_range_start) &
-                               (all_video_data['published_date'] <= date_range_end)]
+filtered_data = all_video_data[
+    (all_video_data['published_date'] >= date_range_start) &
+    (all_video_data['published_date'] <= date_range_end)
+]
 
 if tag_search:
     filtered_data = filtered_data[filtered_data['tags'].apply(lambda x: tag_search in x)]
